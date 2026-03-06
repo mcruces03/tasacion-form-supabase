@@ -1,18 +1,13 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import multiparty from 'multiparty';
 import { google } from 'googleapis';
 import { createClient } from '@supabase/supabase-js';
-import { readFileSync } from 'fs';
 
 const emailUser = (process.env.EMAIL_USER || '').trim();
 const gmailClientId = process.env.GMAIL_CLIENT_ID || '';
 const gmailClientSecret = process.env.GMAIL_CLIENT_SECRET || '';
 const gmailRefreshToken = process.env.GMAIL_REFRESH_TOKEN || '';
 const gmailOauthConfigured = !!(
-  emailUser &&
-  gmailClientId &&
-  gmailClientSecret &&
-  gmailRefreshToken
+  emailUser && gmailClientId && gmailClientSecret && gmailRefreshToken
 );
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
@@ -69,7 +64,7 @@ async function sendViaGmailApi(
   attachments: Array<{ filename: string; content: Buffer }>
 ): Promise<void> {
   const gmail = getGmailClient();
-  const from = `"Valoración" <${emailUser}>`;
+  const from = `"Valoracion" <${emailUser}>`;
   const raw = buildMimeMessage(from, to, subject, html, attachments);
   const rawBase64Url = raw
     .toString('base64')
@@ -82,22 +77,12 @@ async function sendViaGmailApi(
   });
 }
 
-function parseForm(
-  req: VercelRequest
-): Promise<{
-  fields: Record<string, string[]>;
-  files: Record<string, { path: string; originalFilename?: string }[]>;
-}> {
-  return new Promise((resolve, reject) => {
-    const form = new multiparty.Form({ maxFieldsSize: 10 * 1024 * 1024 });
-    form.parse(req, (err, fields, files) => {
-      if (err) return reject(err);
-      resolve({
-        fields: (fields || {}) as Record<string, string[]>,
-        files: (files || {}) as Record<string, { path: string; originalFilename?: string }[]>,
-      });
-    });
-  });
+interface SendReportBody {
+  email?: string;
+  form?: Record<string, unknown>;
+  property_id?: string;
+  pdfBase64?: string;
+  xlsxBase64?: string;
 }
 
 export default async function handler(req: VercelRequest, res: VercelResponse) {
@@ -106,11 +91,12 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   try {
-    const { fields, files } = await parseForm(req);
-    const email = (fields?.email?.[0] || '').trim();
-    const formJson = fields?.form?.[0] || '';
-    const pdfFile = files?.pdf?.[0];
-    const xlsxFile = files?.xlsx?.[0];
+    const body = req.body as SendReportBody;
+    const email = (body?.email || '').trim();
+    const formData = body?.form || null;
+    const pdfBase64 = body?.pdfBase64 || '';
+    const xlsxBase64 = body?.xlsxBase64 || '';
+    const submittedPropertyId = (body?.property_id || '').trim() || null;
 
     if (!email) {
       return res.status(400).json({ error: 'Email es obligatorio' });
@@ -118,8 +104,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
       return res.status(400).json({ error: 'Email no válido' });
     }
-    if (!pdfFile || !xlsxFile) {
-      return res.status(400).json({ error: 'Faltan archivos PDF o Excel' });
+    if (!pdfBase64 || !xlsxBase64) {
+      return res.status(400).json({ error: 'Faltan archivos PDF o Excel (base64)' });
     }
     if (!gmailOauthConfigured) {
       return res.status(503).json({
@@ -128,35 +114,52 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       });
     }
 
-    let formData: Record<string, unknown> | null = null;
-    if (formJson) {
-      try {
-        formData = JSON.parse(formJson) as Record<string, unknown>;
-      } catch {
-        // optional: store without form data
-      }
-    }
-
-    // Save to Supabase if configured
+    // Save to Supabase: upsert property + create valoracion snapshot
+    let propertyId: string | null = null;
     if (supabaseUrl && supabaseServiceKey && formData) {
       const supabase = createClient(supabaseUrl, supabaseServiceKey);
-      const { error: insertError } = await supabase.from('valoraciones').insert({
+
+      if (submittedPropertyId) {
+        const { error: updateErr } = await supabase
+          .from('properties')
+          .update({ data: formData })
+          .eq('id', submittedPropertyId);
+        if (updateErr) console.error('Supabase property update error:', updateErr);
+        propertyId = submittedPropertyId;
+      } else {
+        const operacion = typeof formData.operacion === 'string' ? formData.operacion : 'sell';
+        const initialStatus = operacion === 'rent' ? 'to_rent' : 'to_sell';
+        const { data: newProp, error: insertErr } = await supabase
+          .from('properties')
+          .insert({ data: formData, status: initialStatus })
+          .select('id')
+          .single();
+        if (insertErr) console.error('Supabase property insert error:', insertErr);
+        propertyId = newProp?.id ?? null;
+      }
+
+      const { error: valErr } = await supabase.from('valoraciones').insert({
         data: formData,
         email_sent_to: email,
+        property_id: propertyId,
       });
-      if (insertError) {
-        console.error('Supabase insert error:', insertError);
-      }
+      if (valErr) console.error('Supabase valoracion insert error:', valErr);
     }
 
-    const pdfBuffer = readFileSync(pdfFile.path);
-    const xlsxBuffer = readFileSync(xlsxFile.path);
-    const baseName =
-      formData && typeof formData.direccion === 'string'
-        ? `valoracion-${String(formData.direccion).replace(/\s+/g, '_').substring(0, 30)}`
-        : 'valoracion-inmueble';
+    const pdfBuffer = Buffer.from(pdfBase64, 'base64');
+    const xlsxBuffer = Buffer.from(xlsxBase64, 'base64');
+    const inmuebleName =
+      formData && typeof formData.direccion === 'string' && formData.direccion.trim()
+        ? String(formData.direccion).trim()
+        : 'Inmueble';
+    const baseName = `valoracion-${inmuebleName.replace(/\s+/g, '_').substring(0, 30)}`;
+    const now = new Date();
+    const dd = String(now.getDate()).padStart(2, '0');
+    const mm = String(now.getMonth() + 1).padStart(2, '0');
+    const yy = String(now.getFullYear()).slice(-2);
+    const dateStr = `${dd}/${mm}/${yy}`;
 
-    const subject = 'Valoración de inmueble - Informe';
+    const subject = `Valoracion del inmueble ${inmuebleName} - Informe ${dateStr}`;
     const html = '<p>Adjunto encontrará el informe de valoración en PDF y Excel.</p>';
     const attachments = [
       { filename: `${baseName}.pdf`, content: pdfBuffer },
@@ -169,12 +172,15 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   } catch (err) {
     console.error('send-report error:', err);
     const msg = err instanceof Error ? err.message : 'Error interno';
-    const code = (err as { code?: string })?.code?.toLowerCase() || '';
+    const rawCode = (err as { code?: string | number })?.code;
+    const code = typeof rawCode === 'string' ? rawCode.toLowerCase() : String(rawCode ?? '');
     let userMessage = msg;
     if (
       code === 'eauth' ||
+      code === '401' ||
       msg.includes('Invalid login') ||
-      msg.includes('authentication')
+      msg.includes('authentication') ||
+      msg.includes('unauthorized_client')
     ) {
       userMessage =
         'Email no configurado correctamente. Usa OAuth2 (GMAIL_CLIENT_ID, GMAIL_CLIENT_SECRET, GMAIL_REFRESH_TOKEN) y obtén el refresh token con el script get-gmail-oauth-token.js.';

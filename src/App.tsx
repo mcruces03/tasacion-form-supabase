@@ -11,14 +11,19 @@ import {
   Mail,
   X,
   Database,
+  List,
+  Save,
+  Loader2,
+  AlertTriangle,
 } from 'lucide-react';
 import AccordionSection from './components/AccordionSection';
 import FormField from './components/FormField';
+import PropertyList from './components/PropertyList';
 import Select from './components/Select';
 import { type ValoracionForm, defaultFormValues } from './types';
 import { exportToPdf, exportToPdfBlob } from './utils/exportPdf';
 import { exportToExcel, exportToExcelBlob } from './utils/exportExcel';
-import { loadFormFromStorage, saveFormToStorage } from './utils/persistForm';
+import { loadFormFromStorage, saveFormToStorage, mergeFormFromApi } from './utils/persistForm';
 
 function countFilledKeys(obj: Record<string, unknown>, keys: string[]): number {
   return keys.filter((k) => {
@@ -45,7 +50,7 @@ function resizeArray(arr: string[], length: number): string[] {
 
 const basicKeys = [
   'fechaVisita', 'asesor', 'direccion', 'propietarios', 'oficina',
-  'zona', 'telefonos', 'razonVenta', 'necesitaComprar', 'caracteristicasProximaCompra',
+  'zona', 'telefonos', 'operacion', 'razonVenta', 'necesitaComprar', 'caracteristicasProximaCompra',
 ];
 const edificioKeys = [
   'anoConstruccion', 'tipo', 'plantas', 'fachada', 'calefaccion',
@@ -67,9 +72,83 @@ const medidasFixedKeys = [
 
 const DEFAULT_EMAIL = 'mfcruces@gmail.com';
 
+function parseHash(): { view: 'list' | 'form'; editId: string | null; action: string | null } {
+  const hash = window.location.hash.slice(1) || '/';
+  if (hash === '/properties' || hash === '/properties/') {
+    return { view: 'list', editId: null, action: null };
+  }
+  const match = hash.match(/^\/properties\/([^/?#]+)/);
+  if (match) {
+    const action = hash.includes('action=email') ? 'email' : null;
+    return { view: 'form', editId: match[1], action };
+  }
+  return { view: 'form', editId: null, action: null };
+}
+
 export default function App() {
+  const [route, setRoute] = useState(parseHash);
   const [form, setForm] = useState<ValoracionForm>(loadFormFromStorage);
   const [showExportMenu, setShowExportMenu] = useState(false);
+  const cleanFormRef = useRef<string>('');
+  const [showNavConfirm, setShowNavConfirm] = useState(false);
+  const pendingHashRef = useRef<string | null>(null);
+
+  const formIsDirty = useCallback(() => {
+    if (!cleanFormRef.current) return false;
+    return JSON.stringify(form) !== cleanFormRef.current;
+  }, [form]);
+
+  useEffect(() => {
+    const onHashChange = () => {
+      const next = parseHash();
+      const leavingForm = route.view === 'form';
+      const stayingOnSameForm = next.view === 'form' && next.editId === route.editId;
+      if (leavingForm && !stayingOnSameForm && formIsDirty()) {
+        pendingHashRef.current = window.location.hash;
+        window.location.hash = route.editId ? `/properties/${route.editId}` : '/';
+        setShowNavConfirm(true);
+        return;
+      }
+      setRoute(next);
+    };
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, [route, formIsDirty]);
+
+  useEffect(() => {
+    if (route.view === 'form' && route.editId) {
+      let cancelled = false;
+      setEditInternalId(null);
+      fetch(`/api/properties/${route.editId}`)
+        .then((res) => res.json())
+        .then((data) => {
+          if (cancelled) return;
+          const merged = data?.data ? mergeFormFromApi(data.data) : defaultFormValues;
+          setForm(merged);
+          cleanFormRef.current = JSON.stringify(merged);
+          if (data?.internal_id) setEditInternalId(data.internal_id);
+          if (route.action === 'email') {
+            setShowEmailModal(true);
+            setSendEmailError(null);
+            setSendEmailSuccess(false);
+            window.location.hash = `/properties/${route.editId}`;
+          }
+        })
+        .catch(() => {
+          if (!cancelled) {
+            setForm(defaultFormValues);
+            cleanFormRef.current = JSON.stringify(defaultFormValues);
+          }
+        });
+      return () => { cancelled = true; };
+    }
+    if (route.view === 'form' && !route.editId) {
+      const loaded = loadFormFromStorage();
+      setForm(loaded);
+      cleanFormRef.current = JSON.stringify(loaded);
+      setEditInternalId(null);
+    }
+  }, [route.view, route.editId, route.action]);
 
   useEffect(() => {
     const t = setTimeout(() => saveFormToStorage(form), 400);
@@ -82,6 +161,8 @@ export default function App() {
   const [sendEmailSuccess, setSendEmailSuccess] = useState(false);
   const [saveDbLoading, setSaveDbLoading] = useState(false);
   const [saveDbMessage, setSaveDbMessage] = useState<string | null>(null);
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false);
+  const [editInternalId, setEditInternalId] = useState<string | null>(null);
   const exportMenuRef = useRef<HTMLDivElement>(null);
   const exportButtonRef = useRef<HTMLButtonElement>(null);
   const [exportMenuStyle, setExportMenuStyle] = useState<{ top: number; left: number } | null>(null);
@@ -150,10 +231,11 @@ export default function App() {
     });
   }, []);
 
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+
   const handleReset = () => {
-    if (confirm('¿Seguro que quieres borrar todos los campos?')) {
-      setForm(defaultFormValues);
-    }
+    setForm(defaultFormValues);
+    setShowResetConfirm(false);
   };
 
   const handleSendByEmail = async () => {
@@ -173,18 +255,35 @@ export default function App() {
     try {
       const pdfBlob = await exportToPdfBlob(form);
       const excelBlob = exportToExcelBlob(form);
-      const baseName = `valoracion-${(form.direccion || 'inmueble').replace(/\s+/g, '_').substring(0, 30)}`;
-      const formData = new FormData();
-      formData.append('email', email);
-      formData.append('form', JSON.stringify(form));
-      formData.append('pdf', pdfBlob, `${baseName}.pdf`);
-      formData.append('xlsx', excelBlob, `${baseName}.xlsx`);
+
+      const toBase64 = (blob: Blob): Promise<string> =>
+        new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = reader.result as string;
+            resolve(dataUrl.split(',')[1] || '');
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+        });
+
+      const [pdfBase64, xlsxBase64] = await Promise.all([
+        toBase64(pdfBlob),
+        toBase64(excelBlob),
+      ]);
 
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 90000);
       const res = await fetch('/api/send-report', {
         method: 'POST',
-        body: formData,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email,
+          form,
+          pdfBase64,
+          xlsxBase64,
+          ...(route.editId ? { property_id: route.editId } : {}),
+        }),
         signal: controller.signal,
       });
       clearTimeout(timeoutId);
@@ -209,14 +308,22 @@ export default function App() {
     setSaveDbMessage(null);
     setSaveDbLoading(true);
     try {
-      const res = await fetch('/api/valoraciones', {
-        method: 'POST',
+      const isEdit = Boolean(route.editId);
+      const url = isEdit ? `/api/properties/${route.editId}` : '/api/properties';
+      const res = await fetch(url, {
+        method: isEdit ? 'PUT' : 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ form }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok) throw new Error(data.error || `Error ${res.status}`);
-      setSaveDbMessage('Guardado correctamente en la base de datos.');
+      if (!res.ok) throw new Error((data as { error?: string }).error || `Error ${res.status}`);
+      cleanFormRef.current = JSON.stringify(form);
+      if (isEdit) {
+        setSaveDbMessage('Cambios guardados correctamente.');
+      } else {
+        const internalId = (data as { internal_id?: string }).internal_id;
+        setSaveDbMessage(internalId ? `Guardado correctamente. ID: ${internalId}` : 'Guardado correctamente en la base de datos.');
+      }
     } catch (e) {
       setSaveDbMessage(e instanceof Error ? e.message : 'Error al guardar');
     } finally {
@@ -241,23 +348,78 @@ export default function App() {
     countFilledArray(form.dormMedidas) +
     countFilledArray(form.banoMedidas);
 
+  if (route.view === 'list') {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-oliva-50/40">
+        <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur-lg">
+          <div className="mx-auto flex max-w-3xl items-center justify-between px-4 py-3">
+            <a
+              href="#/"
+              className="flex items-center gap-3 rounded-lg transition-colors hover:bg-slate-50"
+            >
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-oliva-500 to-oliva-600 shadow-md shadow-oliva-200">
+                <Home className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <h1 className="text-lg font-bold text-gray-800 leading-tight">Valoración</h1>
+                <p className="text-[11px] text-gray-400">Lista de propiedades</p>
+              </div>
+            </a>
+          </div>
+        </header>
+        <PropertyList
+          onNew={() => { window.location.hash = '/'; }}
+          onEdit={(id) => { window.location.hash = `/properties/${id}`; }}
+          onEmail={(id) => { window.location.hash = `/properties/${id}?action=email`; }}
+          onDownloadPdf={async (id) => {
+            try {
+              const res = await fetch(`/api/properties/${id}`);
+              const prop = await res.json();
+              if (prop?.data) await exportToPdf(mergeFormFromApi(prop.data));
+            } catch { /* ignore */ }
+          }}
+          onDownloadExcel={async (id) => {
+            try {
+              const res = await fetch(`/api/properties/${id}`);
+              const prop = await res.json();
+              if (prop?.data) exportToExcel(mergeFormFromApi(prop.data));
+            } catch { /* ignore */ }
+          }}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-50 via-white to-oliva-50/40">
       <header className="sticky top-0 z-30 border-b border-slate-200 bg-white/90 backdrop-blur-lg">
         <div className="mx-auto flex max-w-2xl items-center justify-between px-4 py-3">
           <div className="flex items-center gap-3">
-            <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-oliva-500 to-oliva-600 shadow-md shadow-oliva-200">
-              <Home className="h-5 w-5 text-white" />
+            <div className="flex items-center gap-2">
+              <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-br from-oliva-500 to-oliva-600 shadow-md shadow-oliva-200">
+                <Home className="h-5 w-5 text-white" />
+              </div>
+              <div>
+                <h1 className="text-lg font-bold text-gray-800 leading-tight">Valoración</h1>
+                <p className="text-[11px] text-gray-400">
+                  {route.editId
+                    ? <span>Editar propiedad {editInternalId && <span className="font-mono font-semibold text-oliva-600">{editInternalId}</span>}</span>
+                    : `${totalFilled}/${totalFields} campos`}
+                </p>
+              </div>
             </div>
-            <div>
-              <h1 className="text-lg font-bold text-gray-800 leading-tight">Valoración</h1>
-              <p className="text-[11px] text-gray-400">{totalFilled}/{totalFields} campos</p>
-            </div>
+            <a
+              href="#/properties"
+              className="flex items-center gap-1.5 rounded-xl border border-slate-200 bg-white px-3 py-2 text-sm font-medium text-slate-600 transition-colors hover:bg-slate-50"
+            >
+              <List className="h-4 w-4" />
+              <span className="hidden sm:inline">Propiedades</span>
+            </a>
           </div>
           <div className="flex items-center gap-2">
             <button
               type="button"
-              onClick={handleReset}
+              onClick={() => setShowResetConfirm(true)}
               className="flex h-9 w-9 items-center justify-center rounded-xl text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
               title="Limpiar formulario"
             >
@@ -304,12 +466,12 @@ export default function App() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => { setShowExportMenu(false); handleSaveToDb(); }}
+                    onClick={() => { setShowExportMenu(false); setShowSaveConfirm(true); }}
                     disabled={saveDbLoading}
                     className="flex w-full items-center gap-3 border-t border-slate-100 px-4 py-3 text-sm text-gray-700 transition-colors hover:bg-oliva-50 disabled:opacity-60"
                   >
                     <Database className="h-4 w-4 text-sky-600" />
-                    Guardar en BD
+                    {route.editId ? 'Guardar cambios' : 'Guardar en BD'}
                   </button>
                 </div>
               )}
@@ -325,12 +487,6 @@ export default function App() {
       </header>
 
       <main className="mx-auto max-w-2xl space-y-4 px-4 py-6 pb-24">
-
-        {saveDbMessage && (
-          <p className={`rounded-lg px-4 py-2 text-sm ${saveDbMessage.startsWith('Guardado') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
-            {saveDbMessage}
-          </p>
-        )}
 
         <AccordionSection
           title="Datos de la visita"
@@ -361,8 +517,32 @@ export default function App() {
             <FormField label="Teléfonos">
               <input type="tel" value={form.telefonos} onChange={(e) => update('telefonos', e.target.value)} placeholder="Número(s) de teléfono" />
             </FormField>
-            <FormField label="Razón de venta" className="sm:col-span-2">
-              <input type="text" value={form.razonVenta} onChange={(e) => update('razonVenta', e.target.value)} placeholder="Motivo de la venta" />
+            <FormField label="Operación" className="sm:col-span-2">
+              <div className="flex gap-6">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="operacion"
+                    checked={form.operacion === 'sell'}
+                    onChange={() => update('operacion', 'sell')}
+                    className="h-4 w-4 accent-oliva-500"
+                  />
+                  <span className="text-sm text-slate-700">Venta</span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="operacion"
+                    checked={form.operacion === 'rent'}
+                    onChange={() => update('operacion', 'rent')}
+                    className="h-4 w-4 accent-oliva-500"
+                  />
+                  <span className="text-sm text-slate-700">Alquiler</span>
+                </label>
+              </div>
+            </FormField>
+            <FormField label={form.operacion === 'rent' ? 'Razón de alquiler' : 'Razón de venta'} className="sm:col-span-2">
+              <input type="text" value={form.razonVenta} onChange={(e) => update('razonVenta', e.target.value)} placeholder={form.operacion === 'rent' ? 'Motivo del alquiler' : 'Motivo de la venta'} />
             </FormField>
             <FormField label="¿Necesita comprar?">
               <Select
@@ -590,6 +770,22 @@ export default function App() {
             </FormField>
           </div>
         </AccordionSection>
+
+        <div className="mt-6 flex justify-center">
+          <button
+            type="button"
+            onClick={() => setShowSaveConfirm(true)}
+            disabled={saveDbLoading}
+            className="flex items-center gap-2.5 rounded-xl bg-gradient-to-r from-oliva-500 to-oliva-600 px-8 py-3 text-base font-semibold text-white shadow-lg shadow-oliva-200 transition-all hover:shadow-xl hover:shadow-oliva-300 active:scale-95 disabled:opacity-60"
+          >
+            {saveDbLoading ? (
+              <Loader2 className="h-5 w-5 animate-spin" />
+            ) : (
+              <Save className="h-5 w-5" />
+            )}
+            {route.editId ? 'Guardar Cambios' : 'Guardar Propiedad'}
+          </button>
+        </div>
       </main>
 
       <div className="fixed bottom-6 right-6 z-40 flex flex-col gap-2 sm:hidden">
@@ -603,6 +799,128 @@ export default function App() {
           <FileSpreadsheet className="h-5 w-5" />
         </button>
       </div>
+
+      {showNavConfirm && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => { setShowNavConfirm(false); pendingHashRef.current = null; }} />
+          <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-amber-100">
+                <AlertTriangle className="h-5 w-5 text-amber-600" />
+              </div>
+              <h3 className="text-base font-semibold text-slate-800">Cambios sin guardar</h3>
+            </div>
+            <p className="mb-5 text-sm text-slate-600">
+              Tienes cambios que no se han guardado. Si sales ahora, los perderás.
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => { setShowNavConfirm(false); pendingHashRef.current = null; }}
+                className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                Quedarse
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setShowNavConfirm(false);
+                  cleanFormRef.current = JSON.stringify(form);
+                  if (pendingHashRef.current) {
+                    window.location.hash = pendingHashRef.current.replace(/^#/, '');
+                    pendingHashRef.current = null;
+                  }
+                }}
+                className="flex-1 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-red-700"
+              >
+                Salir sin guardar
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showResetConfirm && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowResetConfirm(false)} />
+          <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-red-100">
+                <AlertTriangle className="h-5 w-5 text-red-600" />
+              </div>
+              <h3 className="text-base font-semibold text-slate-800">Limpiar formulario</h3>
+            </div>
+            <p className="mb-5 text-sm text-slate-600">
+              ¿Estás seguro de que quieres borrar todos los campos del formulario? Esta acción no se puede deshacer.
+            </p>
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(false)}
+                className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleReset}
+                className="flex-1 rounded-xl bg-red-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-red-700"
+              >
+                Borrar todo
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSaveConfirm && (
+        <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/40" onClick={() => !saveDbLoading && setShowSaveConfirm(false)} />
+          <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+            <div className="mb-4 flex items-center gap-3">
+              <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-oliva-100">
+                <Save className="h-5 w-5 text-oliva-600" />
+              </div>
+              <div>
+                <h3 className="text-base font-semibold text-slate-800">
+                  {route.editId ? 'Guardar cambios' : 'Guardar nueva propiedad'}
+                </h3>
+                {route.editId && editInternalId && (
+                  <p className="text-sm font-mono text-oliva-700">{editInternalId}</p>
+                )}
+              </div>
+            </div>
+            <p className="mb-5 text-sm text-slate-600">
+              {route.editId
+                ? `¿Confirmas que deseas guardar los cambios en la propiedad ${editInternalId || ''}?`
+                : '¿Confirmas que deseas crear una nueva propiedad con los datos del formulario?'}
+            </p>
+            {saveDbMessage && (
+              <p className={`mb-4 rounded-lg px-3 py-2 text-sm ${saveDbMessage.startsWith('Guardado') || saveDbMessage.startsWith('Cambios') ? 'bg-green-50 text-green-700' : 'bg-red-50 text-red-700'}`}>
+                {saveDbMessage}
+              </p>
+            )}
+            <div className="flex gap-3">
+              <button
+                type="button"
+                onClick={() => { setShowSaveConfirm(false); setSaveDbMessage(null); }}
+                disabled={saveDbLoading}
+                className="flex-1 rounded-xl border border-slate-200 px-4 py-2.5 text-sm font-medium text-slate-700 transition-colors hover:bg-slate-50 disabled:opacity-60"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                onClick={handleSaveToDb}
+                disabled={saveDbLoading}
+                className="flex-1 rounded-xl bg-oliva-500 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:bg-oliva-600 disabled:opacity-60"
+              >
+                {saveDbLoading ? 'Guardando…' : 'Confirmar'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {showEmailModal && (
         <div className="fixed inset-0 z-[200] flex items-center justify-center p-4">

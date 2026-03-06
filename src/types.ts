@@ -1,3 +1,5 @@
+export type Operacion = 'sell' | 'rent';
+
 export interface ValoracionForm {
   // Datos básicos
   fechaVisita: string;
@@ -7,6 +9,7 @@ export interface ValoracionForm {
   oficina: string;
   zona: string;
   telefonos: string;
+  operacion: Operacion;
   razonVenta: string;
   necesitaComprar: string;
   caracteristicasProximaCompra: string;
@@ -70,6 +73,7 @@ export const defaultFormValues: ValoracionForm = {
   oficina: '',
   zona: '',
   telefonos: '',
+  operacion: 'sell',
   razonVenta: '',
   necesitaComprar: '',
   caracteristicasProximaCompra: '',

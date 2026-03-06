@@ -48,3 +48,25 @@ export function saveFormToStorage(form: ValoracionForm): void {
     // ignore quota or other storage errors
   }
 }
+
+/** Merge API property.data (jsonb) into ValoracionForm shape for editing */
+export function mergeFormFromApi(parsed: unknown): ValoracionForm {
+  if (!isPlainObject(parsed)) return defaultFormValues;
+  const merged: ValoracionForm = { ...defaultFormValues };
+  const m = merged as unknown as Record<string, unknown>;
+  for (const key of Object.keys(defaultFormValues) as (keyof ValoracionForm)[]) {
+    const defaultValue = defaultFormValues[key];
+    const storedValue = parsed[key];
+    if (storedValue === undefined) continue;
+    if (Array.isArray(defaultValue)) {
+      m[key] = Array.isArray(storedValue)
+        ? (storedValue as string[]).slice(0, 20).map((v) => (typeof v === 'string' ? v : ''))
+        : defaultValue;
+    } else if (typeof defaultValue === 'boolean') {
+      m[key] = Boolean(storedValue);
+    } else if (typeof defaultValue === 'string') {
+      m[key] = typeof storedValue === 'string' ? storedValue : '';
+    }
+  }
+  return merged;
+}
