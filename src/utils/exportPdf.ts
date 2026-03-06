@@ -103,6 +103,24 @@ function drawSectionBg(doc: jsPDF, y: number, height: number, useGrey = false): 
   doc.roundedRect(14, y, doc.internal.pageSize.getWidth() - 28, height, 2, 2, 'F');
 }
 
+async function loadImageAsDataUrl(url: string): Promise<{ dataUrl: string; width: number; height: number } | null> {
+  try {
+    const res = await fetch(url);
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    const dataUrl = await blobToDataUrl(blob);
+
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve({ dataUrl, width: img.naturalWidth, height: img.naturalHeight });
+      img.onerror = () => resolve(null);
+      img.src = dataUrl;
+    });
+  } catch {
+    return null;
+  }
+}
+
 async function buildPdfDocument(data: ValoracionForm): Promise<jsPDF> {
   const logoDataUrl = await loadLogoDataUrl();
 
@@ -279,6 +297,58 @@ async function buildPdfDocument(data: ValoracionForm): Promise<jsPDF> {
   doc.text(data.totalesUtiles || '—', col1 + 40, y + 3);
   doc.text('Totales const.:', col2, y + 3);
   doc.text(data.totalesConst || '—', col2 + 40, y + 3);
+
+  // FOTOGRAFÍAS
+  if (data.fotos && data.fotos.length > 0) {
+    const loaded = await Promise.all(data.fotos.map(loadImageAsDataUrl));
+    const validImages = loaded.filter((img): img is NonNullable<typeof img> => img !== null);
+
+    if (validImages.length > 0) {
+      doc.addPage();
+      drawPageHeader(doc, logoDataUrl);
+      y = 36;
+      y = drawHeader(doc, y, 'FOTOGRAFÍAS');
+
+      const imgMargin = 14;
+      const gap = 6;
+      const colCount = 2;
+      const imgColW = (W - imgMargin * 2 - gap) / colCount;
+      const maxImgH = 70;
+
+      for (let i = 0; i < validImages.length; i++) {
+        const colIdx = i % colCount;
+        const img = validImages[i];
+
+        const ratio = img.width / img.height;
+        let drawW = imgColW;
+        let drawH = drawW / ratio;
+        if (drawH > maxImgH) {
+          drawH = maxImgH;
+          drawW = drawH * ratio;
+          if (drawW > imgColW) drawW = imgColW;
+        }
+
+        if (y + drawH > H - 20) {
+          doc.addPage();
+          drawPageHeader(doc, logoDataUrl);
+          y = 36;
+          y = drawHeader(doc, y, 'FOTOGRAFÍAS (cont.)');
+        }
+
+        const x = imgMargin + colIdx * (imgColW + gap) + (imgColW - drawW) / 2;
+
+        try {
+          doc.addImage(img.dataUrl, 'JPEG', x, y, drawW, drawH);
+        } catch {
+          // skip unreadable image
+        }
+
+        if (colIdx === colCount - 1 || i === validImages.length - 1) {
+          y += drawH + gap;
+        }
+      }
+    }
+  }
 
   // Footer
   const pageCount = doc.getNumberOfPages();

@@ -15,9 +15,11 @@ import {
   Save,
   Loader2,
   AlertTriangle,
+  Camera,
 } from 'lucide-react';
 import AccordionSection from './components/AccordionSection';
 import FormField from './components/FormField';
+import ImageUpload from './components/ImageUpload';
 import PropertyList from './components/PropertyList';
 import Select from './components/Select';
 import { type ValoracionForm, defaultFormValues } from './types';
@@ -769,6 +771,21 @@ export default function App() {
               <input type="text" value={form.totalesConst} onChange={(e) => update('totalesConst', e.target.value)} placeholder="m²" className="!border-oliva-300 !bg-oliva-50 font-semibold" />
             </FormField>
           </div>
+        </AccordionSection>
+
+        <AccordionSection
+          title="Fotografías"
+          icon={<Camera className="h-5 w-5" />}
+          filledCount={form.fotos.length}
+          totalCount={Math.max(form.fotos.length, 1)}
+        >
+          <p className="mb-3 text-xs text-gray-400">
+            Adjunta fotografías del inmueble desde la galería o usando la cámara del dispositivo.
+          </p>
+          <ImageUpload
+            images={form.fotos}
+            onChange={(fotos) => update('fotos', fotos)}
+          />
         </AccordionSection>
 
         <div className="mt-6 flex justify-center">

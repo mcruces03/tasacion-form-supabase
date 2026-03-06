@@ -49,6 +49,9 @@ export interface ValoracionForm {
   divorcio: boolean;
   valoracion: string;
 
+  // Fotografías
+  fotos: string[];
+
   // Medidas
   recibidor: string;
   dormMedidas: string[];
@@ -109,6 +112,8 @@ export const defaultFormValues: ValoracionForm = {
   herencia: false,
   divorcio: false,
   valoracion: '',
+
+  fotos: [],
 
   recibidor: '',
   dormMedidas: [],
