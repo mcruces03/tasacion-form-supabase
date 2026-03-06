@@ -1,7 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { google } from 'googleapis';
 import { createClient } from '@supabase/supabase-js';
-import { verifyAuth } from './_auth';
+import { verifyAuth } from '../lib/auth';
 
 const emailUser = (process.env.EMAIL_USER || '').trim();
 const gmailClientId = process.env.GMAIL_CLIENT_ID || '';

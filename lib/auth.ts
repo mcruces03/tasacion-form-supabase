@@ -11,14 +11,19 @@ export async function verifyAuth(req: VercelRequest, res: VercelResponse): Promi
     return false;
   }
 
-  const token = authHeader.slice(7);
-  const supabase = createClient(supabaseUrl, supabaseServiceKey);
-  const { data, error } = await supabase.auth.getUser(token);
+  try {
+    const token = authHeader.slice(7);
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const { data, error } = await supabase.auth.getUser(token);
 
-  if (error || !data.user) {
-    res.status(401).json({ error: 'Sesión inválida o expirada' });
+    if (error || !data.user) {
+      res.status(401).json({ error: 'Sesión inválida o expirada' });
+      return false;
+    }
+
+    return true;
+  } catch {
+    res.status(401).json({ error: 'Error de autenticación' });
     return false;
   }
-
-  return true;
 }
