@@ -1,9 +1,28 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { createClient } from '@supabase/supabase-js';
-import { verifyAuth } from '../lib/auth';
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+async function verifyAuth(req: VercelRequest, res: VercelResponse): Promise<boolean> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'No autorizado' });
+    return false;
+  }
+  try {
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const { data, error } = await supabase.auth.getUser(authHeader.slice(7));
+    if (error || !data.user) {
+      res.status(401).json({ error: 'Sesión inválida o expirada' });
+      return false;
+    }
+    return true;
+  } catch {
+    res.status(401).json({ error: 'Error de autenticación' });
+    return false;
+  }
+}
 
 const BUCKET = 'property-images';
 const MAX_SIZE = 5 * 1024 * 1024; // 5 MB after base64 decode

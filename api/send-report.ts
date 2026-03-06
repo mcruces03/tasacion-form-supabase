@@ -1,7 +1,6 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { google } from 'googleapis';
 import { createClient } from '@supabase/supabase-js';
-import { verifyAuth } from '../lib/auth';
 
 const emailUser = (process.env.EMAIL_USER || '').trim();
 const gmailClientId = process.env.GMAIL_CLIENT_ID || '';
@@ -13,6 +12,26 @@ const gmailOauthConfigured = !!(
 
 const supabaseUrl = process.env.VITE_SUPABASE_URL || process.env.SUPABASE_URL || '';
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || '';
+
+async function verifyAuth(req: VercelRequest, res: VercelResponse): Promise<boolean> {
+  const authHeader = req.headers.authorization;
+  if (!authHeader?.startsWith('Bearer ')) {
+    res.status(401).json({ error: 'No autorizado' });
+    return false;
+  }
+  try {
+    const supabase = createClient(supabaseUrl, supabaseServiceKey);
+    const { data, error } = await supabase.auth.getUser(authHeader.slice(7));
+    if (error || !data.user) {
+      res.status(401).json({ error: 'Sesión inválida o expirada' });
+      return false;
+    }
+    return true;
+  } catch {
+    res.status(401).json({ error: 'Error de autenticación' });
+    return false;
+  }
+}
 
 function getGmailClient() {
   const auth = new google.auth.OAuth2(gmailClientId, gmailClientSecret);
