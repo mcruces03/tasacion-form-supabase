@@ -1,6 +1,7 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { google } from 'googleapis';
 import { createClient } from '@supabase/supabase-js';
+import { verifyAuth } from './_auth';
 
 const emailUser = (process.env.EMAIL_USER || '').trim();
 const gmailClientId = process.env.GMAIL_CLIENT_ID || '';
@@ -89,6 +90,8 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
+
+  if (!(await verifyAuth(req, res))) return;
 
   try {
     const body = req.body as SendReportBody;

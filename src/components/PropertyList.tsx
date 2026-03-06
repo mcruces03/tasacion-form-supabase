@@ -57,6 +57,7 @@ interface PropertyListProps {
   onEmail: (id: string) => void;
   onDownloadPdf: (id: string) => void;
   onDownloadExcel: (id: string) => void;
+  headers?: Record<string, string>;
 }
 
 export default function PropertyList({
@@ -65,6 +66,7 @@ export default function PropertyList({
   onEmail,
   onDownloadPdf,
   onDownloadExcel,
+  headers = {},
 }: PropertyListProps) {
   const [list, setList] = useState<PropertyRow[]>([]);
   const [loading, setLoading] = useState(true);
@@ -82,7 +84,7 @@ export default function PropertyList({
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch('/api/properties');
+      const res = await fetch('/api/properties', { headers });
       const data = await res.json().catch(() => []);
       if (!res.ok) throw new Error(Array.isArray(data) ? 'Error al cargar' : (data as { error?: string }).error);
       setList(Array.isArray(data) ? data : []);
@@ -120,7 +122,7 @@ export default function PropertyList({
     setConfirmDeleteId(null);
     setDeletingId(id);
     try {
-      const res = await fetch(`/api/properties/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/properties/${id}`, { method: 'DELETE', headers });
       if (!res.ok) {
         const data = await res.json().catch(() => ({}));
         throw new Error((data as { error?: string }).error || 'Error al eliminar');
@@ -139,7 +141,7 @@ export default function PropertyList({
     try {
       const res = await fetch(`/api/properties/${id}`, {
         method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { ...headers, 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: newStatus }),
       });
       if (!res.ok) {

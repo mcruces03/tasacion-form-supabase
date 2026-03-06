@@ -16,10 +16,14 @@ import {
   Loader2,
   AlertTriangle,
   Camera,
+  LogOut,
 } from 'lucide-react';
+import type { Session } from '@supabase/supabase-js';
+import { supabase } from './lib/supabase';
 import AccordionSection from './components/AccordionSection';
 import FormField from './components/FormField';
 import ImageUpload from './components/ImageUpload';
+import LoginScreen from './components/LoginScreen';
 import PropertyList from './components/PropertyList';
 import Select from './components/Select';
 import { type ValoracionForm, defaultFormValues } from './types';
@@ -87,7 +91,45 @@ function parseHash(): { view: 'list' | 'form'; editId: string | null; action: st
   return { view: 'form', editId: null, action: null };
 }
 
+function authHeaders(session: Session | null): Record<string, string> {
+  const h: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (session?.access_token) h['Authorization'] = `Bearer ${session.access_token}`;
+  return h;
+}
+
 export default function App() {
+  const [session, setSession] = useState<Session | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      setAuthLoading(false);
+    });
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, s) => {
+      setSession(s);
+    });
+    return () => subscription.unsubscribe();
+  }, []);
+
+  if (authLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-slate-50 via-white to-oliva-50/40">
+        <Loader2 className="h-8 w-8 animate-spin text-oliva-500" />
+      </div>
+    );
+  }
+
+  if (!session) {
+    return <LoginScreen />;
+  }
+
+  return <AuthenticatedApp session={session} />;
+}
+
+function AuthenticatedApp({ session }: Readonly<{ session: Session }>) {
+  const headers = useMemo(() => authHeaders(session), [session]);
+
   const [route, setRoute] = useState(parseHash);
   const [form, setForm] = useState<ValoracionForm>(loadFormFromStorage);
   const [showExportMenu, setShowExportMenu] = useState(false);
@@ -121,7 +163,7 @@ export default function App() {
     if (route.view === 'form' && route.editId) {
       let cancelled = false;
       setEditInternalId(null);
-      fetch(`/api/properties/${route.editId}`)
+      fetch(`/api/properties/${route.editId}`, { headers })
         .then((res) => res.json())
         .then((data) => {
           if (cancelled) return;
@@ -278,7 +320,7 @@ export default function App() {
       const timeoutId = setTimeout(() => controller.abort(), 90000);
       const res = await fetch('/api/send-report', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({
           email,
           form,
@@ -314,7 +356,7 @@ export default function App() {
       const url = isEdit ? `/api/properties/${route.editId}` : '/api/properties';
       const res = await fetch(url, {
         method: isEdit ? 'PUT' : 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ form }),
       });
       const data = await res.json().catch(() => ({}));
@@ -367,22 +409,31 @@ export default function App() {
                 <p className="text-[11px] text-gray-400">Lista de propiedades</p>
               </div>
             </a>
+            <button
+              type="button"
+              onClick={() => supabase.auth.signOut()}
+              className="flex h-9 w-9 items-center justify-center rounded-xl text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+              title="Cerrar sesión"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
           </div>
         </header>
         <PropertyList
+          headers={headers}
           onNew={() => { window.location.hash = '/'; }}
           onEdit={(id) => { window.location.hash = `/properties/${id}`; }}
           onEmail={(id) => { window.location.hash = `/properties/${id}?action=email`; }}
           onDownloadPdf={async (id) => {
             try {
-              const res = await fetch(`/api/properties/${id}`);
+              const res = await fetch(`/api/properties/${id}`, { headers });
               const prop = await res.json();
               if (prop?.data) await exportToPdf(mergeFormFromApi(prop.data));
             } catch { /* ignore */ }
           }}
           onDownloadExcel={async (id) => {
             try {
-              const res = await fetch(`/api/properties/${id}`);
+              const res = await fetch(`/api/properties/${id}`, { headers });
               const prop = await res.json();
               if (prop?.data) exportToExcel(mergeFormFromApi(prop.data));
             } catch { /* ignore */ }
@@ -419,6 +470,14 @@ export default function App() {
             </a>
           </div>
           <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => supabase.auth.signOut()}
+              className="flex h-9 w-9 items-center justify-center rounded-xl text-gray-400 transition-colors hover:bg-gray-100 hover:text-gray-600"
+              title="Cerrar sesión"
+            >
+              <LogOut className="h-4 w-4" />
+            </button>
             <button
               type="button"
               onClick={() => setShowResetConfirm(true)}
@@ -785,6 +844,7 @@ export default function App() {
           <ImageUpload
             images={form.fotos}
             onChange={(fotos) => update('fotos', fotos)}
+            headers={headers}
           />
         </AccordionSection>
 

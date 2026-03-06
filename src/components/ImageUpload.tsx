@@ -6,6 +6,7 @@ interface ImageUploadProps {
   readonly images: string[];
   readonly onChange: (images: string[]) => void;
   readonly maxImages?: number;
+  readonly headers?: Record<string, string>;
 }
 
 const BUCKET = 'property-images';
@@ -17,7 +18,7 @@ function extractPathFromUrl(url: string): string | null {
   return url.substring(idx + marker.length);
 }
 
-export default function ImageUpload({ images, onChange, maxImages = 20 }: ImageUploadProps) {
+export default function ImageUpload({ images, onChange, maxImages = 20, headers = {} }: ImageUploadProps) {
   const fileInputRef = useRef<HTMLInputElement>(null);
   const cameraInputRef = useRef<HTMLInputElement>(null);
   const [uploading, setUploading] = useState(false);
@@ -45,7 +46,7 @@ export default function ImageUpload({ images, onChange, maxImages = 20 }: ImageU
 
         const res = await fetch('/api/upload-image', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { ...headers, 'Content-Type': 'application/json' },
           body: JSON.stringify({ base64, contentType }),
         });
 
@@ -88,7 +89,7 @@ export default function ImageUpload({ images, onChange, maxImages = 20 }: ImageU
         if (path) {
           await fetch('/api/delete-image', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
+            headers: { ...headers, 'Content-Type': 'application/json' },
             body: JSON.stringify({ path }),
           });
         }
