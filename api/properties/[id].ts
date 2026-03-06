@@ -95,6 +95,29 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
   }
 
   if (req.method === 'DELETE') {
+    const { data: prop } = await supabase
+      .from('properties')
+      .select('data')
+      .eq('id', id)
+      .single();
+
+    const fotos = Array.isArray(prop?.data?.fotos) ? (prop.data.fotos as string[]) : [];
+    if (fotos.length > 0) {
+      const bucket = 'property-images';
+      const marker = `/storage/v1/object/public/${bucket}/`;
+      const paths = fotos
+        .map((url: string) => {
+          const idx = url.indexOf(marker);
+          return idx !== -1 ? url.substring(idx + marker.length) : null;
+        })
+        .filter((p): p is string => p !== null);
+
+      if (paths.length > 0) {
+        const { error: storageErr } = await supabase.storage.from(bucket).remove(paths);
+        if (storageErr) console.error('Storage cleanup error:', storageErr);
+      }
+    }
+
     const { error } = await supabase.from('properties').delete().eq('id', id);
     if (error) {
       if (error.code === 'PGRST116') {
